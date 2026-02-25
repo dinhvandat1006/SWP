@@ -79,9 +79,31 @@ export const registerUser = async ({ email, password, fullName, role }) => {
     }
   });
 
+  // If registering as instructor, create Instructor record
+  let instructorRecord = null;
+  if (userRole === 'instructor') {
+    instructorRecord = await prisma.instructors.create({
+      data: {
+        Id: uuidv4(),
+        CreatorId: userId,
+        Title: '',
+        Description: '',
+        Background: '',
+        AverageRating: 0,
+        RatingCount: 0,
+        StudentCount: 0,
+        CourseCount: 0,
+        IsApproved: false,
+        CreationTime: new Date(),
+      }
+    });
+  }
+
   // Return user with plain refresh token (not hashed)
   return {
     ...newUser,
+    instructor: instructorRecord ? { id: instructorRecord.Id } : null,
+    instructorId: instructorRecord?.Id || null,
     accessToken, // Include access token for response
     plainRefreshToken: refreshToken // Include plain refresh token for response
   };

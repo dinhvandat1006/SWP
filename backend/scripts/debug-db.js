@@ -1,29 +1,28 @@
+import prisma from "../src/lib/prisma.js";
 
-import prisma from '../src/lib/prisma.js';
-
-BigInt.prototype.toJSON = function() { return this.toString() }
+BigInt.prototype.toJSON = function () {
+  return this.toString();
+};
 
 async function main() {
-  console.log('--- Latest 5 Checkouts ---');
-  const checkouts = await prisma.cartCheckout.findMany({
-    take: 5,
-    orderBy: { CreationTime: 'desc' },
-    include: { Users: { select: { UserName: true, Email: true } } }
+  console.log("--- All Users in Database ---");
+  const users = await prisma.users.findMany({
+    select: { Id: true, Email: true, FullName: true, Role: true },
   });
-  console.log(JSON.stringify(checkouts, null, 2));
+  console.log(`Total users: ${users.length}`);
 
-  console.log('\n--- Latest 5 Enrollments ---');
-  const enrollments = await prisma.enrollments.findMany({
-    take: 5,
-    orderBy: { CreationTime: 'desc' },
-    include: { Courses: { select: { Title: true } } }
-  });
-  console.log(JSON.stringify(enrollments, null, 2));
+  if (users.length === 0) {
+    console.log("❌ No users found! You need to register first.");
+  } else {
+    users.forEach((u) => {
+      console.log(`  ✓ ${u.Email} | ${u.FullName} | Role: ${u.Role}`);
+    });
+  }
 }
 
 main()
-  .catch(e => {
-    console.error(e);
+  .catch((e) => {
+    console.error("Error:", e);
     process.exit(1);
   })
   .finally(async () => {

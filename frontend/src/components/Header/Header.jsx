@@ -172,6 +172,15 @@ const Header = () => {
                       </div>
                     </div>
                     <div className="p-2">
+                      {(user.role === 'instructor' || user.role === 'INSTRUCTOR') && (
+                        <>
+                          <Link to="/instructor-dashboard" onClick={() => setIsDropdownOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-purple-500/10 text-purple-400 hover:text-purple-300 transition-colors">
+                            <span className="material-symbols-outlined text-[20px]">dashboard</span>
+                            <span className="text-sm font-medium">Teaching Dashboard</span>
+                          </Link>
+                          <div className="my-1 h-px bg-[#2a2a3a]"></div>
+                        </>
+                      )}
                       <Link to="/my-learning?tab=wishlist" onClick={() => setIsDropdownOpen(false)} className="flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-[#2a2a3a]/50 text-gray-300 hover:text-white transition-colors">
                         <span className="material-symbols-outlined text-[20px]">favorite</span>
                         <span className="text-sm font-medium">My Wishlist</span>
