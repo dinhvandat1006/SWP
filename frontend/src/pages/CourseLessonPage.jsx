@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import useAuth from "../hooks/useAuth";
+import Quiz from "../components/Quiz";
 import {
   fetchCourseLessons,
   fetchEnrollmentProgress,
@@ -73,6 +74,32 @@ export default function CourseLessonPage() {
   const [selectedLessonId, setSelectedLessonId] = useState(
     lessonId || "lecture-003",
   );
+  const [isInstructorPreview, setIsInstructorPreview] = useState(false);
+  const [videoProgress, setVideoProgress] = useState(35);
+  const [isVideoPlaying, setIsVideoPlaying] = useState(false);
+
+  // Check if this is instructor preview mode
+  // NEVER use instructor preview in CourseLessonPage - it's for enrolled students only
+  // Instructors should use the instructor dashboard to preview their courses
+  useEffect(() => {
+    const checkInstructorPreview = () => {
+      // Always set to false - this page is for enrolled students
+      const shouldPreview = false;
+      console.log("[CourseLessonPage] Instructor preview check:", {
+        user: user?.id,
+        isInstructor:
+          user?.instructor ||
+          user?.instructorId ||
+          (user?.role || user?.Role || "").trim().toLowerCase() ===
+            "instructor",
+        lessonId,
+        shouldPreview,
+        note: "Always false - use instructor dashboard for preview",
+      });
+      setIsInstructorPreview(shouldPreview);
+    };
+    checkInstructorPreview();
+  }, [user, lessonId]);
 
   // Fetch course data
   const {
@@ -80,9 +107,24 @@ export default function CourseLessonPage() {
     isLoading: courseLoading,
     error: courseError,
   } = useQuery({
-    queryKey: ["courseLessons", courseId],
-    queryFn: () => fetchCourseLessons(courseId),
+    queryKey: ["courseLessons", courseId, isInstructorPreview],
+    queryFn: () => {
+      console.log(
+        "[CourseLessonPage] Fetching course:",
+        courseId,
+        "isInstructorPreview:",
+        isInstructorPreview,
+      );
+      return fetchCourseLessons(courseId, isInstructorPreview);
+    },
     enabled: !!courseId && courseId !== "demo",
+    retry: 1,
+    onError: (error) => {
+      console.error("[CourseLessonPage] Query error:", error);
+    },
+    onSuccess: (data) => {
+      console.log("[CourseLessonPage] Query success:", data);
+    },
   });
 
   // Fetch enrollment progress
@@ -108,11 +150,32 @@ export default function CourseLessonPage() {
 
   // Find the current lesson from sections
   const findLessonInSections = (sections, lectureId) => {
-    for (const section of sections || []) {
+    if (!sections) return null;
+    for (const section of sections) {
       const lecture = section.Lectures?.find((l) => l.Id === lectureId);
-      if (lecture) return { ...lecture, ...MOCK_CURRENT_LESSON };
+      if (lecture) {
+        // Extract video URL from lecture materials
+        const videoMaterial = lecture.LectureMaterial?.find(
+          (m) => m.Type === "video",
+        );
+
+        // Get all materials for resources tab
+        const materials = lecture.LectureMaterial || [];
+
+        return {
+          Id: lecture.Id,
+          Title: lecture.Title,
+          Content:
+            lecture.Content || "No content available for this lesson yet.",
+          IsPreviewable: lecture.IsPreviewable,
+          SectionTitle: section.Title,
+          VideoUrl: videoMaterial?.Url || null,
+          Materials: materials, // Include all materials
+        };
+      }
     }
-    return MOCK_CURRENT_LESSON;
+    // Return null if not found instead of mock data
+    return null;
   };
 
   // Get the first lecture if no specific lecture is selected
@@ -137,33 +200,88 @@ export default function CourseLessonPage() {
     return Math.round((completedLectures / totalLectures) * 100);
   };
 
+  // Get material icon based on type
+  const getMaterialIcon = (type) => {
+    const iconMap = {
+      video: "play_circle",
+      pdf: "picture_as_pdf",
+      docx: "description",
+      doc: "description",
+      pptx: "slideshow",
+      ppt: "slideshow",
+      xlsx: "table_chart",
+      xls: "table_chart",
+      zip: "folder_zip",
+      txt: "text_snippet",
+    };
+    return iconMap[type?.toLowerCase()] || "insert_drive_file";
+  };
+
+  // Get material color based on type
+  const getMaterialColor = (type) => {
+    const colorMap = {
+      video: "text-red-400",
+      pdf: "text-red-500",
+      docx: "text-blue-400",
+      doc: "text-blue-400",
+      pptx: "text-orange-400",
+      ppt: "text-orange-400",
+      xlsx: "text-green-400",
+      xls: "text-green-400",
+      zip: "text-yellow-400",
+      txt: "text-slate-400",
+    };
+    return colorMap[type?.toLowerCase()] || "text-slate-400";
+  };
+
+  // Get friendly name for material type
+  const getMaterialTypeName = (type) => {
+    const nameMap = {
+      video: "Video",
+      pdf: "PDF Document",
+      docx: "Word Document",
+      doc: "Word Document",
+      pptx: "PowerPoint",
+      ppt: "PowerPoint",
+      xlsx: "Excel Spreadsheet",
+      xls: "Excel Spreadsheet",
+      zip: "ZIP Archive",
+      txt: "Text File",
+    };
+    return nameMap[type?.toLowerCase()] || type?.toUpperCase() || "File";
+  };
+
   // Transform sections for the sidebar
   const transformSections = (sections, enrollment) => {
     if (!sections) return [];
     const completedLectures =
       JSON.parse(enrollment?.LectureMilestones || "[]") || [];
 
-    return sections.map((section) => ({
-      title: `Section ${section.Index}: ${section.Title}`,
+    return sections.map((section, idx) => ({
+      title: section.Title,
+      sectionNumber: idx + 1,
       status: section.Lectures?.every((l) => completedLectures.includes(l.Id))
         ? "completed"
         : section.Lectures?.some((l) => completedLectures.includes(l.Id))
           ? "in-progress"
-          : section.Index > 1
+          : idx > 0
             ? "locked"
             : "in-progress",
       items:
-        section.Lectures?.map((lecture) => ({
+        section.Lectures?.map((lecture, lecIdx) => ({
           id: lecture.Id,
           title: lecture.Title,
+          lectureNumber: lecIdx + 1,
+          content: lecture.Content,
+          isPreviewable: lecture.IsPreviewable,
           status: completedLectures.includes(lecture.Id)
             ? "completed"
             : lecture.Id === currentLessonId
               ? "active"
-              : section.Index > 1
+              : idx > 0
                 ? "locked"
                 : "pending",
-          duration: `${Math.ceil(Math.random() * 20)} min`,
+          duration: `${Math.ceil(Math.random() * 15 + 5)} min`,
           type: "Video",
         })) || [],
     }));
@@ -219,6 +337,22 @@ export default function CourseLessonPage() {
         <div className="flex flex-col items-center gap-4">
           <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
           <p className="text-white">Loading course...</p>
+          <div className="mt-4 p-4 bg-slate-900/50 rounded-lg border border-slate-700 max-w-md">
+            <p className="text-xs text-slate-400 mb-2">Debug Info:</p>
+            <pre className="text-xs text-slate-300">
+              {JSON.stringify(
+                {
+                  courseId,
+                  isInstructorPreview,
+                  userRole: user?.role,
+                  hasInstructor: !!user?.instructor,
+                  lessonId,
+                },
+                null,
+                2,
+              )}
+            </pre>
+          </div>
         </div>
       </div>
     );
@@ -356,6 +490,9 @@ export default function CourseLessonPage() {
               <div
                 className={`flex items-center gap-3 px-2 py-2 mb-1 text-xs font-semibold uppercase tracking-wider ${getSectionBorderColor(section.status)}`}
               >
+                <span className="text-slate-500 mr-1">
+                  {section.sectionNumber}.
+                </span>
                 {section.title}
               </div>
               <div
@@ -393,11 +530,7 @@ export default function CourseLessonPage() {
                       {getStatusIcon(item.status)}
                     </span>
 
-                    <div
-                      className={
-                        item.status === "active" ? "flex flex-col" : ""
-                      }
-                    >
+                    <div className="flex-1 flex flex-col">
                       <span
                         className={`text-sm ${
                           item.status === "active"
@@ -407,13 +540,14 @@ export default function CourseLessonPage() {
                               : "text-slate-300 group-hover:text-white"
                         }`}
                       >
+                        <span className="text-slate-500 text-xs mr-1">
+                          {item.lectureNumber}.
+                        </span>
                         {item.title}
                       </span>
-                      {item.status === "active" && (
-                        <span className="text-[10px] text-primary/80">
-                          {item.duration} • {item.type}
-                        </span>
-                      )}
+                      <span className="text-[10px] text-slate-500 mt-0.5">
+                        {item.duration} • {item.type}
+                      </span>
                     </div>
                   </button>
                 ))}
@@ -497,69 +631,60 @@ export default function CourseLessonPage() {
             onMouseEnter={() => setIsVideoPlaying(true)}
             onMouseLeave={() => setIsVideoPlaying(false)}
           >
-            {/* Video Placeholder Image */}
-            <div
-              className="absolute inset-0 bg-cover bg-center opacity-80"
-              style={{
-                backgroundImage:
-                  'url("https://lh3.googleusercontent.com/aida-public/AB6AXuBrH1bYAvV9jkXKrkBtFVsxeovu1Mf50xCnf21UNgs0nVONHxAUGcUXxt1-fEec4DMA9gO0QKwXTPw9FRgmX34EO0Ol_sfhZlh0GPasmaQcPC4ZWoWGhN2tSs_dpVDAfJIw3_rQIX2GD74V7GkH-gVN27NGKs23u_spTgR7IbpkrGd8KXv8JP-rsMhKPwkorNqIwfWy3xDYgSf3bXQzePwg1Loeii9IBT8yQTDO2nx0hSkwChnBdlbGUW8LHTPt2nVE4pOoagc9x94")',
-              }}
-            ></div>
-
-            {/* Play Button Overlay */}
-            <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/10 transition-all">
-              <div className="size-20 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center border border-white/20 group-hover:scale-110 transition-transform duration-300">
-                <span className="material-symbols-outlined text-white text-[48px] ml-1">
-                  play_arrow
-                </span>
-              </div>
-            </div>
-
-            {/* Custom Controls */}
-            <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/90 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-              {/* Progress Bar */}
-              <div className="w-full h-1 bg-white/20 rounded-full mb-4 cursor-pointer hover:h-1.5 transition-all group/progress">
-                <div
-                  className="h-full bg-primary rounded-full relative"
-                  style={{ width: `${videoProgress}%` }}
+            {currentLesson?.VideoUrl ? (
+              <>
+                {/* HTML5 Video Player */}
+                <video
+                  key={currentLesson.VideoUrl}
+                  className="w-full h-full object-cover"
+                  controls
+                  controlsList="nodownload"
+                  preload="auto"
+                  autoPlay
+                  muted
+                  onError={(e) => {
+                    console.error("Video error:", e);
+                    console.error("Failed URL:", currentLesson.VideoUrl);
+                    console.error("Error details:", e.target.error);
+                  }}
+                  onLoadedMetadata={() => {
+                    console.log(
+                      "Video loaded successfully:",
+                      currentLesson.VideoUrl,
+                    );
+                  }}
+                  onCanPlay={() => {
+                    console.log("Video can play");
+                  }}
                 >
-                  <div className="absolute right-0 top-1/2 -translate-y-1/2 size-3 bg-white rounded-full shadow-lg scale-0 group-hover/progress:scale-100 transition-transform"></div>
-                </div>
-              </div>
+                  <source src={currentLesson.VideoUrl} type="video/mp4" />
+                  Your browser does not support the video tag.
+                </video>
+              </>
+            ) : (
+              <>
+                {/* Placeholder when no video */}
+                <div
+                  className="absolute inset-0 bg-cover bg-center opacity-80"
+                  style={{
+                    backgroundImage:
+                      'url("https://lh3.googleusercontent.com/aida-public/AB6AXuBrH1bYAvV9jkXKrkBtFVsxeovu1Mf50xCnf21UNgs0nVONHxAUGcUXxt1-fEec4DMA9gO0QKwXTPw9FRgmX34EO0Ol_sfhZlh0GPasmaQcPC4ZWoWGhN2tSs_dpVDAfJIw3_rQIX2GD74V7GkH-gVN27NGKs23u_spTgR7IbpkrGd8KXv8JP-rsMhKPwkorNqIwfWy3xDYgSf3bXQzePwg1Loeii9IBT8yQTDO2nx0hSkwChnBdlbGUW8LHTPt2nVE4pOoagc9x94")',
+                  }}
+                ></div>
 
-              {/* Controls */}
-              <div className="flex justify-between items-center text-white">
-                <div className="flex items-center gap-4">
-                  <button className="hover:text-primary transition-colors">
-                    <span className="material-symbols-outlined">
+                {/* Play Button Overlay */}
+                <div className="absolute inset-0 flex items-center justify-center bg-black/30 group-hover:bg-black/10 transition-all">
+                  <div className="size-20 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center border border-white/20 group-hover:scale-110 transition-transform duration-300 flex-col">
+                    <span className="material-symbols-outlined text-white text-[48px] ml-1">
                       play_arrow
                     </span>
-                  </button>
-                  <button className="hover:text-primary transition-colors">
-                    <span className="material-symbols-outlined">volume_up</span>
-                  </button>
-                  <span className="text-xs font-mono">00:00 / 12:45</span>
-                </div>
-                <div className="flex items-center gap-4">
-                  <button className="text-xs font-bold border border-white/20 rounded px-1.5 py-0.5 hover:bg-white/10 transition-colors">
-                    1x
-                  </button>
-                  <button className="hover:text-primary transition-colors">
-                    <span className="material-symbols-outlined">
-                      closed_caption
+                    <span className="text-white text-xs mt-2 text-center px-4">
+                      Video coming soon
                     </span>
-                  </button>
-                  <button className="hover:text-primary transition-colors">
-                    <span className="material-symbols-outlined">settings</span>
-                  </button>
-                  <button className="hover:text-primary transition-colors">
-                    <span className="material-symbols-outlined">
-                      fullscreen
-                    </span>
-                  </button>
+                  </div>
                 </div>
-              </div>
-            </div>
+              </>
+            )}
           </div>
 
           {/* Action Bar */}
@@ -610,7 +735,7 @@ export default function CourseLessonPage() {
               >
                 Resources{" "}
                 <span className="bg-slate-800 text-xs px-1.5 rounded-sm">
-                  3
+                  {currentLesson?.Materials?.length || 0}
                 </span>
               </button>
               <button
@@ -644,82 +769,175 @@ export default function CourseLessonPage() {
                 <h3 className="text-lg font-bold text-white mb-4">
                   About this lecture
                 </h3>
-                <p className="text-slate-300 leading-relaxed mb-6">
-                  {currentLesson?.Content || "No description available"}
-                </p>
+                <div className="prose prose-invert max-w-none">
+                  <div className="text-slate-300 leading-relaxed mb-6 whitespace-pre-wrap">
+                    {currentLesson?.Content || "No description available"}
+                  </div>
+                </div>
 
-                <h4 className="text-md font-bold text-white mb-3">
-                  Learning Objectives
+                <h4 className="text-md font-bold text-white mb-3 mt-8">
+                  What you'll learn
                 </h4>
                 <ul className="space-y-3 mb-8">
                   <li className="flex gap-3 items-start text-slate-300">
                     <span className="material-symbols-outlined text-primary text-[20px] mt-0.5">
                       check
                     </span>
-                    <span>Understand the lecture content</span>
+                    <span>Master the concepts introduced in this lecture</span>
+                  </li>
+                  <li className="flex gap-3 items-start text-slate-300">
+                    <span className="material-symbols-outlined text-primary text-[20px] mt-0.5">
+                      check
+                    </span>
+                    <span>Apply what you've learned to practical examples</span>
+                  </li>
+                  <li className="flex gap-3 items-start text-slate-300">
+                    <span className="material-symbols-outlined text-primary text-[20px] mt-0.5">
+                      check
+                    </span>
+                    <span>Build a solid foundation for the next lessons</span>
                   </li>
                 </ul>
+
+                {currentLesson?.SectionTitle && (
+                  <div className="bg-slate-900/50 rounded-lg p-4 border border-glass-border flex items-center gap-4 mb-4">
+                    <div className="size-12 rounded bg-[#1e1e2e] flex items-center justify-center shrink-0">
+                      <span className="material-symbols-outlined text-purple-400">
+                        folder
+                      </span>
+                    </div>
+                    <div className="flex-1">
+                      <h5 className="text-white font-medium">Section</h5>
+                      <p className="text-slate-400 text-sm">
+                        {currentLesson.SectionTitle}
+                      </p>
+                    </div>
+                  </div>
+                )}
 
                 <div className="bg-slate-900/50 rounded-lg p-4 border border-glass-border flex items-center gap-4">
                   <div className="size-12 rounded bg-[#1e1e2e] flex items-center justify-center shrink-0">
                     <span className="material-symbols-outlined text-blue-400">
-                      code
+                      folder
                     </span>
                   </div>
                   <div className="flex-1">
-                    <h5 className="text-white font-medium">Starter Code</h5>
+                    <h5 className="text-white font-medium">Lesson Resources</h5>
                     <p className="text-slate-400 text-sm">
-                      Download the starter files to follow along.
+                      {currentLesson?.Materials?.length > 0
+                        ? `${currentLesson.Materials.length} file(s) available - Videos, PDFs, documents and more`
+                        : "No materials available for this lesson"}
                     </p>
                   </div>
-                  <button className="text-sm font-medium text-white hover:text-primary transition-colors flex items-center gap-1">
-                    Download{" "}
-                    <span className="material-symbols-outlined text-[18px]">
-                      download
-                    </span>
-                  </button>
+                  {currentLesson?.Materials?.length > 0 && (
+                    <button
+                      onClick={() => setActiveTab("resources")}
+                      className="text-sm font-medium text-white hover:text-primary transition-colors flex items-center gap-1"
+                    >
+                      View All{" "}
+                      <span className="material-symbols-outlined text-[18px]">
+                        arrow_forward
+                      </span>
+                    </button>
+                  )}
                 </div>
               </div>
             )}
 
             {activeTab === "resources" && (
               <div className="glass-panel rounded-xl p-8">
-                <h3 className="text-lg font-bold text-white mb-4">Resources</h3>
-                <div className="space-y-3">
-                  {[
-                    "Lecture Materials",
-                    "Code Examples",
-                    "Additional Readings",
-                  ].map((resource, index) => (
-                    <div
-                      key={index}
-                      className="flex items-center justify-between p-4 hover:bg-white/5 rounded-lg transition-colors"
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="material-symbols-outlined text-primary">
-                          description
-                        </span>
-                        <span className="text-slate-300">{resource}</span>
-                      </div>
-                      <button className="text-primary hover:text-purple-400 transition-colors">
-                        <span className="material-symbols-outlined">
-                          download
-                        </span>
-                      </button>
-                    </div>
-                  ))}
-                </div>
+                <h3 className="text-lg font-bold text-white mb-4">
+                  Lecture Resources
+                </h3>
+                {currentLesson?.Materials &&
+                currentLesson.Materials.length > 0 ? (
+                  <div className="space-y-3">
+                    {currentLesson.Materials.map((material, index) => {
+                      const fileName = material.Url.split("/").pop();
+                      const fileType = material.Type;
+
+                      return (
+                        <div
+                          key={index}
+                          className="flex items-center justify-between p-4 hover:bg-white/5 rounded-lg transition-colors border border-glass-border"
+                        >
+                          <div className="flex items-center gap-4 flex-1">
+                            <div className={`${getMaterialColor(fileType)}`}>
+                              <span className="material-symbols-outlined text-[32px]">
+                                {getMaterialIcon(fileType)}
+                              </span>
+                            </div>
+                            <div className="flex flex-col flex-1 min-w-0">
+                              <span className="text-white font-medium truncate">
+                                {getMaterialTypeName(fileType)}
+                              </span>
+                              <span className="text-slate-400 text-sm truncate">
+                                {fileName}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <a
+                              href={material.Url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-4 py-2 bg-primary/10 hover:bg-primary/20 text-primary border border-primary/30 rounded-lg transition-colors flex items-center gap-2"
+                            >
+                              <span className="material-symbols-outlined text-[18px]">
+                                open_in_new
+                              </span>
+                              <span className="text-sm font-medium">View</span>
+                            </a>
+                            <a
+                              href={material.Url}
+                              download
+                              className="px-4 py-2 bg-white/5 hover:bg-white/10 text-white border border-glass-border rounded-lg transition-colors"
+                            >
+                              <span className="material-symbols-outlined text-[18px]">
+                                download
+                              </span>
+                            </a>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-12 text-center">
+                    <span className="material-symbols-outlined text-6xl text-slate-700 mb-4">
+                      folder_open
+                    </span>
+                    <p className="text-slate-400 text-lg font-medium mb-2">
+                      No resources available
+                    </p>
+                    <p className="text-slate-500 text-sm">
+                      The instructor hasn't uploaded any materials for this
+                      lesson yet.
+                    </p>
+                  </div>
+                )}
               </div>
             )}
 
             {activeTab === "qa" && (
               <div className="glass-panel rounded-xl p-8">
-                <h3 className="text-lg font-bold text-white mb-4">
-                  Questions & Answers
-                </h3>
-                <p className="text-slate-400">
-                  Ask questions about this lesson or share your insights!
-                </p>
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h3 className="text-lg font-bold text-white mb-2">
+                      Course Quiz
+                    </h3>
+                    <p className="text-slate-400 text-sm">
+                      Test your knowledge with these practice questions
+                    </p>
+                  </div>
+                  <span className="material-symbols-outlined text-4xl text-purple-500">
+                    quiz
+                  </span>
+                </div>
+                <Quiz
+                  courseId={courseId}
+                  onClose={() => setActiveTab("overview")}
+                />
               </div>
             )}
 

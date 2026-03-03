@@ -9,7 +9,8 @@
     "dev": "nodemon src/index.js",
     "postinstall": "prisma generate",
     "check-course-status": "node scripts/checkCourseStatus.js",
-    "setup-instructor": "node scripts/setup-instructor.js"
+    "setup-instructor": "node scripts/setup-instructor.js",
+    "init-storage": "node scripts/init-storage.js"
   },
   "dependencies": {
     "@prisma/client": "^5.7.0",
@@ -23,6 +24,7 @@
     "google-auth-library": "^10.5.0",
     "googleapis": "^170.0.0",
     "jsonwebtoken": "^9.0.3",
+    "multer": "^2.0.2",
     "node-cache": "^5.1.2",
     "nodemailer": "^7.0.11",
     "open": "^11.0.0",

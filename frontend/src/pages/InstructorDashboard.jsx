@@ -3,13 +3,15 @@ import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import useAuth from "../hooks/useAuth";
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const API_URL = import.meta.env.VITE_API_URL || "http://localhost:5000/api";
 
 export default function InstructorDashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [timeframe, setTimeframe] = useState("6months");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [viewMode, setViewMode] = useState("my"); // "my" or "all"
   const [courses, setCourses] = useState([]);
   const [stats, setStats] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -22,8 +24,9 @@ export default function InstructorDashboard() {
       return;
     }
 
-    // Check for instructor field or instructorId or role
-    if (!user.instructor && !user.instructorId && user.role !== 'instructor') {
+    // Check for instructor field or instructorId or role (both cases: uppercase and lowercase)
+    const roleValue = (user.role || user.Role || "").trim().toLowerCase();
+    if (!user.instructor && !user.instructorId && roleValue !== "instructor") {
       toast.error("You do not have instructor privileges");
       navigate("/");
       return;
@@ -36,60 +39,102 @@ export default function InstructorDashboard() {
 
     const fetchData = async () => {
       try {
-        const token = localStorage.getItem('accessToken');
-        
+        const token = localStorage.getItem("accessToken");
+
         // Fetch stats
         const statsRes = await fetch(`${API_URL}/courses/instructor/stats`, {
-          headers: { 'Authorization': `Bearer ${token}` }
+          headers: { Authorization: `Bearer ${token}` },
         });
         if (statsRes.ok) {
           const statsData = await statsRes.json();
           setStats(statsData.data);
         }
 
-        // Fetch courses
-        const coursesRes = await fetch(
-          `${API_URL}/courses/instructor/courses?status=${statusFilter}`,
-          { headers: { 'Authorization': `Bearer ${token}` } }
-        );
+        // Fetch courses based on view mode
+        let coursesRes;
+        if (viewMode === "my") {
+          // Fetch instructor's own courses
+          coursesRes = await fetch(
+            `${API_URL}/courses/instructor/courses?status=${statusFilter}`,
+            { headers: { Authorization: `Bearer ${token}` } },
+          );
+        } else {
+          // Fetch all courses (public API)
+          coursesRes = await fetch(`${API_URL}/courses?limit=1000`);
+        }
+
         if (coursesRes.ok) {
           const coursesData = await coursesRes.json();
-          setCourses(coursesData.data || []);
+          console.log("[InstructorDashboard] Courses response:", coursesData);
+          console.log("[InstructorDashboard] Courses data:", coursesData.data);
+
+          // Handle different response formats
+          let coursesArray = [];
+          if (viewMode === "all") {
+            coursesArray = coursesData.data?.courses || coursesData.data || [];
+          } else {
+            coursesArray = coursesData.data || [];
+          }
+
+          console.log(
+            "[InstructorDashboard] Parsed courses array:",
+            coursesArray,
+          );
+          console.log(
+            "[InstructorDashboard] Courses count:",
+            coursesArray.length,
+          );
+          if (coursesArray.length > 0) {
+            console.log(
+              "[InstructorDashboard] First course sample:",
+              coursesArray[0],
+            );
+          }
+
+          setCourses(coursesArray);
+        } else {
+          console.error(
+            "[InstructorDashboard] Failed to fetch courses:",
+            coursesRes.status,
+            await coursesRes.text(),
+          );
+          toast.error("Failed to fetch courses");
         }
       } catch (error) {
-        console.error('Failed to fetch instructor data:', error);
-        toast.error('Failed to load dashboard data');
+        console.error("Failed to fetch instructor data:", error);
+        toast.error("Failed to load dashboard data");
       } finally {
         setIsLoading(false);
       }
     };
 
     fetchData();
-  }, [user, statusFilter]);
+  }, [user, statusFilter, viewMode]);
 
   // Fallback stats if API fails
-  const dashboardStats = stats ? {
-    totalStudents: stats.totalStudents.toLocaleString(),
-    studentsTrend: "+12.5%",
-    totalRevenue: `$${stats.totalRevenue}`,
-    revenueTrend: "+8.2%",
-    totalCourses: stats.totalCourses.toString(),
-    coursesTrend: "Stable",
-    topCourse: {
-      title: courses[0]?.Title || "N/A",
-      rating: courses[0]?.Rating || 0,
-      learners: courses[0]?.StudentCount?.toLocaleString() || "0"
-    }
-  } : {
-    totalStudents: "0",
-    studentsTrend: "+0%",
-    totalRevenue: "$0",
-    revenueTrend: "+0%",
-    totalCourses: "0",
-    coursesTrend: "Loading...",
-    topCourse: { title: "Loading...", rating: 0, learners: "0" }
-  };
-
+  const dashboardStats = stats
+    ? {
+        totalStudents: stats.totalStudents.toLocaleString(),
+        studentsTrend: "+12.5%",
+        totalRevenue: `$${stats.totalRevenue}`,
+        revenueTrend: "+8.2%",
+        totalCourses: stats.totalCourses.toString(),
+        coursesTrend: "Stable",
+        topCourse: {
+          title: courses[0]?.title || "N/A",
+          rating: courses[0]?.rating || 0,
+          learners: courses[0]?.studentCount?.toLocaleString() || "0",
+        },
+      }
+    : {
+        totalStudents: "0",
+        studentsTrend: "+0%",
+        totalRevenue: "$0",
+        revenueTrend: "+0%",
+        totalCourses: "0",
+        coursesTrend: "Loading...",
+        topCourse: { title: "Loading...", rating: 0, learners: "0" },
+      };
 
   const handleLogout = () => {
     logout();
@@ -97,25 +142,122 @@ export default function InstructorDashboard() {
     navigate("/login?role=instructor");
   };
 
-  const handlePublish = () => {
-    toast.success("Course published successfully!");
+  const handlePublish = async (courseId) => {
+    try {
+      const token = localStorage.getItem("accessToken");
+
+      // Get current course to determine action
+      const course = courses.find((c) => c.id === courseId);
+      const isPublished =
+        course?.status === "Ongoing" || course?.status === "published";
+
+      const endpoint = isPublished ? "unpublish" : "publish";
+      const response = await fetch(
+        `${API_URL}/courses/${courseId}/${endpoint}`,
+        {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        },
+      );
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to update course");
+      }
+
+      const data = await response.json();
+
+      // Update local state
+      setCourses(
+        courses.map((c) =>
+          c.id === courseId
+            ? { ...c, status: isPublished ? "Draft" : "Ongoing" }
+            : c,
+        ),
+      );
+
+      toast.success(
+        data.message ||
+          (isPublished
+            ? "Course unpublished"
+            : "Course published successfully!"),
+      );
+    } catch (error) {
+      console.error("Publish error:", error);
+      toast.error(error.message || "Failed to update course");
+    }
   };
 
   const handleEdit = (id) => {
     navigate(`/edit-course/${id}`);
   };
 
-  const handleDelete = (id) => {
-    setCourses(courses.filter(c => c.id !== id));
-    toast.success("Course deleted successfully");
+  const handleView = (id) => {
+    // Navigate to course preview (as learner view)
+    navigate(`/course/${id}`);
+  };
+
+  const handleDelete = async (courseId) => {
+    if (!window.confirm("Are you sure you want to delete this course?")) {
+      return;
+    }
+
+    try {
+      const token = localStorage.getItem("accessToken");
+      const response = await fetch(`${API_URL}/courses/${courseId}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to delete course");
+      }
+
+      setCourses(courses.filter((c) => c.id !== courseId));
+      toast.success("Course deleted successfully");
+    } catch (error) {
+      console.error("Delete error:", error);
+      toast.error("Failed to delete course");
+    }
   };
 
   const handleCreateCourse = () => {
     navigate("/instructor/create-course");
   };
 
-  // Filter courses based on status (real API already filters, but just in case)
-  const filteredCourses = courses;
+  // Filter courses based on search query
+  const filteredCourses = useMemo(() => {
+    if (!searchQuery.trim()) {
+      return courses;
+    }
+
+    const query = searchQuery.toLowerCase().trim();
+    return courses.filter((course) => {
+      // Support both camelCase and PascalCase field names
+      const title = (course.title || course.Title || "").toLowerCase();
+      const description = (
+        course.description ||
+        course.Description ||
+        ""
+      ).toLowerCase();
+      const categoryName = (
+        course.categoryName ||
+        course.CategoryName ||
+        ""
+      ).toLowerCase();
+
+      return (
+        title.includes(query) ||
+        description.includes(query) ||
+        categoryName.includes(query)
+      );
+    });
+  }, [courses, searchQuery]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-white font-display overflow-x-hidden">
@@ -128,13 +270,24 @@ export default function InstructorDashboard() {
       {/* Fixed Sidebar - Desktop */}
       <aside className="hidden lg:fixed left-0 top-0 w-64 h-screen z-50 lg:flex flex-col bg-slate-900/80 backdrop-blur-xl border-r border-white/5 p-6">
         {/* Logo */}
-        <div className="mb-12 flex items-center gap-3">
-          <div className="w-10 h-10 bg-purple-500 rounded-lg flex items-center justify-center shadow-lg">
-            <span className="material-symbols-outlined text-white text-xl">rocket_launch</span>
+        <div
+          className="mb-12 flex items-center gap-3 cursor-pointer group"
+          onClick={() => navigate("/")}
+        >
+          <div className="h-10 w-auto">
+            <img
+              src="/FlyUpTeam.png"
+              alt="FlyUp Logo"
+              className="h-full w-auto object-contain transition-transform group-hover:scale-110"
+            />
           </div>
-          <div>
-            <h1 className="text-white font-bold text-lg">Nova Learning</h1>
-            <p className="text-xs text-purple-400">Instructor Hub</p>
+          <div className="flex flex-col">
+            <h1 className="text-lg font-black tracking-tight bg-gradient-to-r from-white to-gray-300 bg-clip-text text-transparent leading-tight">
+              FlyUp
+            </h1>
+            <p className="text-xs font-semibold bg-gradient-to-r from-primary to-purple-400 bg-clip-text text-transparent leading-tight tracking-wide">
+              Edu & Tech
+            </p>
           </div>
         </div>
 
@@ -145,7 +298,7 @@ export default function InstructorDashboard() {
             { icon: "layers", label: "Courses" },
             { icon: "group", label: "Students" },
             { icon: "trending_up", label: "Analytics" },
-            { icon: "wallet", label: "Earnings" }
+            { icon: "wallet", label: "Earnings" },
           ].map((item) => (
             <a
               key={item.label}
@@ -156,7 +309,9 @@ export default function InstructorDashboard() {
                   : "text-slate-400 hover:text-white hover:bg-white/5"
               }`}
             >
-              <span className="material-symbols-outlined text-sm">{item.icon}</span>
+              <span className="material-symbols-outlined text-sm">
+                {item.icon}
+              </span>
               <span className="text-sm font-medium">{item.label}</span>
             </a>
           ))}
@@ -166,13 +321,20 @@ export default function InstructorDashboard() {
         <div className="border-t border-white/10 pt-4 mt-auto">
           <div className="flex items-center gap-3 mb-4">
             <img
-              src={user?.avatar || "https://lh3.googleusercontent.com/aida-public/AB6AXuDXE54T7SHzGeKbXXXlUxacKM7rFAAcrgZVpdd_-2TAuAz9Ux1K211OsyMyrlnV02DzXeuR3UqebcbQh48zeyPWIC0vk_SEj8mWfVnBhEaDAfpvmgpu-tfoqhf1sZy8MwHSNSQoPveBoK-PmRL90gzW18t7OHAEnHhoX0CrSXHdwoZs0DwW0pUhSRR8ZfcGKI8rYQE6eARtf3WUO9zVrR4VvcBTy-HKGmDcSPufUImWl52N8-ODbbGsWsJ_P4pmAXI0ykRDwvcrCGg"}
+              src={
+                user?.avatar ||
+                "https://lh3.googleusercontent.com/aida-public/AB6AXuDXE54T7SHzGeKbXXXlUxacKM7rFAAcrgZVpdd_-2TAuAz9Ux1K211OsyMyrlnV02DzXeuR3UqebcbQh48zeyPWIC0vk_SEj8mWfVnBhEaDAfpvmgpu-tfoqhf1sZy8MwHSNSQoPveBoK-PmRL90gzW18t7OHAEnHhoX0CrSXHdwoZs0DwW0pUhSRR8ZfcGKI8rYQE6eARtf3WUO9zVrR4VvcBTy-HKGmDcSPufUImWl52N8-ODbbGsWsJ_P4pmAXI0ykRDwvcrCGg"
+              }
               alt="User"
               className="w-10 h-10 rounded-full border-2 border-purple-500/50 object-cover"
             />
             <div className="overflow-hidden flex-1">
-              <p className="text-sm font-bold text-white truncate">{user?.name || "Dr. Alaric Thorne"}</p>
-              <p className="text-xs text-slate-400">Senior Instructor</p>
+              <p className="text-sm font-bold text-white truncate">
+                {user?.name || "Instructor"}
+              </p>
+              <p className="text-xs text-slate-400">
+                {user?.email || "instructor@flyup.com"}
+              </p>
             </div>
           </div>
           <button
@@ -190,18 +352,60 @@ export default function InstructorDashboard() {
         {/* Top Navigation */}
         <header className="sticky top-0 z-40 backdrop-blur-xl border-b border-white/5 bg-slate-950/40">
           <div className="px-6 lg:px-10 py-6 flex flex-col md:flex-row md:items-center justify-between gap-6">
-            <div>
-              <h1 className="text-4xl font-bold text-white">Teaching Dashboard</h1>
-              <p className="text-slate-400 mt-1">Manage your courses and student progress</p>
-            </div>
-            <div className="flex items-center gap-4">
-              <div className="relative hidden md:block">
-                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">search</span>
+            <div className="flex-1">
+              <h1 className="text-4xl font-bold text-white">
+                Teaching Dashboard
+              </h1>
+              <p className="text-slate-400 mt-1">
+                Manage your courses and student progress
+              </p>
+
+              {/* Mobile Search */}
+              <div className="relative md:hidden mt-4">
+                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">
+                  search
+                </span>
                 <input
                   type="text"
                   placeholder="Search courses..."
-                  className="pl-10 pr-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-500/50 transition-all"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-10 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-500/50 transition-all"
                 />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-sm">
+                      close
+                    </span>
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="relative hidden md:block">
+                <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-500">
+                  search
+                </span>
+                <input
+                  type="text"
+                  placeholder="Search courses..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-10 pr-4 py-2 bg-white/5 border border-white/10 rounded-lg text-white placeholder:text-slate-500 focus:outline-none focus:border-purple-500/50 transition-all w-64"
+                />
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white transition-colors"
+                  >
+                    <span className="material-symbols-outlined text-sm">
+                      close
+                    </span>
+                  </button>
+                )}
               </div>
               <button className="p-2 hover:bg-white/5 rounded-lg transition-all relative">
                 <span className="material-symbols-outlined">notifications</span>
@@ -223,32 +427,48 @@ export default function InstructorDashboard() {
                 </div>
                 <span className="text-green-400 text-xs font-bold">+12.5%</span>
               </div>
-              <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Total Students</p>
-              <h3 className="text-white text-3xl font-bold">{dashboardStats.totalStudents}</h3>
+              <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">
+                Total Students
+              </p>
+              <h3 className="text-white text-3xl font-bold">
+                {dashboardStats.totalStudents}
+              </h3>
             </div>
 
             {/* Total Revenue */}
             <div className="group bg-white/5 border border-white/10 rounded-2xl p-6 hover:border-purple-500/30 hover:bg-purple-500/5 transition-all">
               <div className="flex justify-between items-start mb-4">
                 <div className="p-3 bg-purple-500/20 rounded-lg text-purple-400">
-                  <span className="material-symbols-outlined">account_balance_wallet</span>
+                  <span className="material-symbols-outlined">
+                    account_balance_wallet
+                  </span>
                 </div>
                 <span className="text-green-400 text-xs font-bold">+8.2%</span>
               </div>
-              <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Total Revenue</p>
-              <h3 className="text-white text-3xl font-bold">{dashboardStats.totalRevenue}</h3>
+              <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">
+                Total Revenue
+              </p>
+              <h3 className="text-white text-3xl font-bold">
+                {dashboardStats.totalRevenue}
+              </h3>
             </div>
 
             {/* Total Courses */}
             <div className="group bg-white/5 border border-white/10 rounded-2xl p-6 hover:border-purple-500/30 hover:bg-purple-500/5 transition-all">
               <div className="flex justify-between items-start mb-4">
                 <div className="p-3 bg-pink-500/20 rounded-lg text-pink-400">
-                  <span className="material-symbols-outlined">auto_stories</span>
+                  <span className="material-symbols-outlined">
+                    auto_stories
+                  </span>
                 </div>
                 <span className="text-slate-400 text-xs font-bold">Stable</span>
               </div>
-              <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Total Courses</p>
-              <h3 className="text-white text-3xl font-bold">{dashboardStats.totalCourses}</h3>
+              <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">
+                Total Courses
+              </p>
+              <h3 className="text-white text-3xl font-bold">
+                {dashboardStats.totalCourses}
+              </h3>
             </div>
 
             {/* Top Course */}
@@ -259,10 +479,14 @@ export default function InstructorDashboard() {
                 </div>
                 <span className="text-green-400 text-xs font-bold">+0.1%</span>
               </div>
-              <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">Top Course</p>
+              <p className="text-slate-500 text-xs font-bold uppercase tracking-wider mb-1">
+                Top Course
+              </p>
               <div className="flex items-center gap-2 text-yellow-400">
                 <span className="material-symbols-outlined text-sm">star</span>
-                <span className="text-sm font-bold">{dashboardStats.topCourse.rating}</span>
+                <span className="text-sm font-bold">
+                  {dashboardStats.topCourse.rating}
+                </span>
               </div>
             </div>
           </section>
@@ -271,8 +495,12 @@ export default function InstructorDashboard() {
           <div className="bg-white/5 border border-white/10 rounded-2xl p-8 backdrop-blur-xl">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
               <div>
-                <h2 className="text-2xl font-bold text-white">Earnings Growth</h2>
-                <p className="text-slate-400 text-sm mt-1">Monthly revenue distribution</p>
+                <h2 className="text-2xl font-bold text-white">
+                  Earnings Growth
+                </h2>
+                <p className="text-slate-400 text-sm mt-1">
+                  Monthly revenue distribution
+                </p>
               </div>
               <div className="flex gap-2 bg-white/5 p-1 rounded-lg border border-white/10">
                 {["6months", "1year", "all"].map((period) => (
@@ -285,13 +513,21 @@ export default function InstructorDashboard() {
                         : "text-slate-400 hover:text-white"
                     }`}
                   >
-                    {period === "6months" ? "6 Months" : period === "1year" ? "1 Year" : "All Time"}
+                    {period === "6months"
+                      ? "6 Months"
+                      : period === "1year"
+                        ? "1 Year"
+                        : "All Time"}
                   </button>
                 ))}
               </div>
             </div>
             <div className="h-80 w-full">
-              <svg className="w-full h-full" preserveAspectRatio="none" viewBox="0 0 1000 300">
+              <svg
+                className="w-full h-full"
+                preserveAspectRatio="none"
+                viewBox="0 0 1000 300"
+              >
                 <defs>
                   <linearGradient id="chartGrad" x1="0" x2="0" y1="0" y2="1">
                     <stop offset="0%" stopColor="#8b5cf6" stopOpacity="0.3" />
@@ -303,11 +539,26 @@ export default function InstructorDashboard() {
                     <stop offset="100%" stopColor="#00f0ff" />
                   </linearGradient>
                 </defs>
-                <path d="M0,250 C100,230 200,270 300,180 C400,90 500,150 600,110 C700,70 800,120 900,40 C950,20 1000,60 1000,60 V300 H0 Z" fill="url(#chartGrad)" />
-                <path d="M0,250 C100,230 200,270 300,180 C400,90 500,150 600,110 C700,70 800,120 900,40 C950,20 1000,60 1000,60" fill="none" stroke="url(#lineGrad)" strokeWidth="4" strokeLinecap="round" />
+                <path
+                  d="M0,250 C100,230 200,270 300,180 C400,90 500,150 600,110 C700,70 800,120 900,40 C950,20 1000,60 1000,60 V300 H0 Z"
+                  fill="url(#chartGrad)"
+                />
+                <path
+                  d="M0,250 C100,230 200,270 300,180 C400,90 500,150 600,110 C700,70 800,120 900,40 C950,20 1000,60 1000,60"
+                  fill="none"
+                  stroke="url(#lineGrad)"
+                  strokeWidth="4"
+                  strokeLinecap="round"
+                />
               </svg>
               <div className="flex justify-between mt-4 text-xs font-bold text-slate-500 uppercase">
-                <span>Jan</span><span>Feb</span><span>Mar</span><span>Apr</span><span>May</span><span>Jun</span><span>Jul</span>
+                <span>Jan</span>
+                <span>Feb</span>
+                <span>Mar</span>
+                <span>Apr</span>
+                <span>May</span>
+                <span>Jun</span>
+                <span>Jul</span>
               </div>
             </div>
           </div>
@@ -316,34 +567,69 @@ export default function InstructorDashboard() {
           <section>
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
               <div>
-                <h2 className="text-2xl font-bold text-white">Your Courses</h2>
-                <p className="text-slate-400 text-sm mt-1">Manage and monitor your published content</p>
+                <h2 className="text-2xl font-bold text-white">
+                  {viewMode === "my" ? "Your Courses" : "All Courses"}
+                </h2>
+                <p className="text-slate-400 text-sm mt-1">
+                  {searchQuery
+                    ? `Found ${filteredCourses.length} course${filteredCourses.length !== 1 ? "s" : ""} matching "${searchQuery}"`
+                    : viewMode === "my"
+                      ? `Manage and monitor your published content ${courses.length > 0 ? `(${courses.length} total)` : ""}`
+                      : `Browse and edit any course in the system ${courses.length > 0 ? `(${courses.length} total)` : ""}`}
+                </p>
               </div>
-              <button
-                onClick={handleCreateCourse}
-                className="px-6 py-3 bg-purple-500 text-white font-bold rounded-lg hover:bg-purple-600 transition-all flex items-center gap-2 w-full md:w-auto justify-center"
-              >
-                <span className="material-symbols-outlined">add</span>
-                Create New Course
-              </button>
+              <div className="flex gap-3 w-full md:w-auto">
+                {/* View Mode Toggle */}
+                <div className="flex gap-2 bg-white/5 p-1 rounded-lg border border-white/10">
+                  <button
+                    onClick={() => setViewMode("my")}
+                    className={`px-4 py-2 rounded-md font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap ${
+                      viewMode === "my"
+                        ? "bg-purple-500 text-white shadow-lg"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    My Courses
+                  </button>
+                  <button
+                    onClick={() => setViewMode("all")}
+                    className={`px-4 py-2 rounded-md font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap ${
+                      viewMode === "all"
+                        ? "bg-purple-500 text-white shadow-lg"
+                        : "text-slate-400 hover:text-white"
+                    }`}
+                  >
+                    All Courses
+                  </button>
+                </div>
+                <button
+                  onClick={handleCreateCourse}
+                  className="px-6 py-3 bg-purple-500 text-white font-bold rounded-lg hover:bg-purple-600 transition-all flex items-center gap-2 justify-center whitespace-nowrap"
+                >
+                  <span className="material-symbols-outlined">add</span>
+                  <span className="hidden sm:inline">Create New</span>
+                </button>
+              </div>
             </div>
 
-            {/* Status Filter */}
-            <div className="flex gap-3 mb-8 overflow-x-auto pb-2">
-              {["all", "published", "draft", "archived"].map((status) => (
-                <button
-                  key={status}
-                  onClick={() => setStatusFilter(status)}
-                  className={`px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap ${
-                    statusFilter === status
-                      ? "bg-purple-500 text-white"
-                      : "bg-white/5 text-slate-400 border border-white/10 hover:border-purple-500/50"
-                  }`}
-                >
-                  {status.charAt(0).toUpperCase() + status.slice(1)}
-                </button>
-              ))}
-            </div>
+            {/* Status Filter - Only show for "My Courses" */}
+            {viewMode === "my" && (
+              <div className="flex gap-3 mb-8 overflow-x-auto pb-2">
+                {["all", "published", "draft", "archived"].map((status) => (
+                  <button
+                    key={status}
+                    onClick={() => setStatusFilter(status)}
+                    className={`px-4 py-2 rounded-lg font-bold text-xs uppercase tracking-wider transition-all whitespace-nowrap ${
+                      statusFilter === status
+                        ? "bg-purple-500 text-white"
+                        : "bg-white/5 text-slate-400 border border-white/10 hover:border-purple-500/50"
+                    }`}
+                  >
+                    {status.charAt(0).toUpperCase() + status.slice(1)}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* Course Grid */}
             {isLoading ? (
@@ -355,33 +641,61 @@ export default function InstructorDashboard() {
               </div>
             ) : filteredCourses.length === 0 ? (
               <div className="text-center py-20">
-                <span className="material-symbols-outlined text-6xl text-slate-700 block mb-4">inbox</span>
-                <h3 className="text-xl font-bold text-white mb-2">No courses found</h3>
-                <p className="text-slate-400">Create your first course to get started</p>
+                <span className="material-symbols-outlined text-6xl text-slate-700 block mb-4">
+                  {searchQuery ? "search_off" : "inbox"}
+                </span>
+                <h3 className="text-xl font-bold text-white mb-2">
+                  {searchQuery
+                    ? "No matching courses found"
+                    : "No courses found"}
+                </h3>
+                <p className="text-slate-400">
+                  {searchQuery
+                    ? `No courses match "${searchQuery}". Try a different search term.`
+                    : "Create your first course to get started"}
+                </p>
+                {searchQuery && (
+                  <button
+                    onClick={() => setSearchQuery("")}
+                    className="mt-4 px-6 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 transition-all"
+                  >
+                    Clear Search
+                  </button>
+                )}
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                 {filteredCourses.map((course) => (
-                  <div key={course.Id} className="group bg-white/5 border border-white/10 rounded-2xl overflow-hidden hover:border-purple-500/50 transition-all">
+                  <div
+                    key={course.id}
+                    className="group bg-white/5 border border-white/10 rounded-2xl overflow-hidden hover:border-purple-500/50 transition-all"
+                  >
                     {/* Course Image */}
                     <div className="relative h-48 overflow-hidden bg-linear-to-br from-purple-900 to-blue-900">
                       <img
-                        src={course.ThumbnailUrl || "https://via.placeholder.com/400x300?text=No+Image"}
-                        alt={course.Title}
+                        src={
+                          course.thumbnailUrl ||
+                          "https://via.placeholder.com/400x300?text=No+Image"
+                        }
+                        alt={course.title}
                         className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-700"
                       />
                       <div className="absolute inset-0 bg-linear-to-t from-black via-transparent to-transparent opacity-60"></div>
-                      
+
                       {/* Status Badge */}
                       <div className="absolute top-4 left-4">
-                        <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider backdrop-blur-md border ${
-                          course.Status === "published"
-                            ? "bg-green-500/30 text-green-300 border-green-500/50"
-                            : course.Status === "draft"
-                            ? "bg-yellow-500/30 text-yellow-300 border-yellow-500/50"
-                            : "bg-slate-500/30 text-slate-300 border-slate-500/50"
-                        }`}>
-                          {course.Status}
+                        <span
+                          className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider backdrop-blur-md border ${
+                            course.status === "Ongoing" ||
+                            course.status === "published"
+                              ? "bg-green-500/30 text-green-300 border-green-500/50"
+                              : course.status === "Draft" ||
+                                  course.status === "draft"
+                                ? "bg-yellow-500/30 text-yellow-300 border-yellow-500/50"
+                                : "bg-slate-500/30 text-slate-300 border-slate-500/50"
+                          }`}
+                        >
+                          {course.status}
                         </span>
                       </div>
                     </div>
@@ -389,18 +703,26 @@ export default function InstructorDashboard() {
                     {/* Course Info */}
                     <div className="p-6 space-y-4">
                       <div>
-                        <h3 className="text-lg font-bold text-white group-hover:text-purple-300 transition-colors">{course.Title}</h3>
-                        <p className="text-sm text-slate-400 mt-2 line-clamp-2">{course.ShortDescription}</p>
+                        <h3 className="text-lg font-bold text-white group-hover:text-purple-300 transition-colors">
+                          {course.title}
+                        </h3>
+                        <p className="text-sm text-slate-400 mt-2 line-clamp-2">
+                          {course.shortDescription}
+                        </p>
                       </div>
 
                       {/* Metrics */}
                       <div className="flex items-center justify-between text-xs text-slate-400 font-bold uppercase tracking-wider">
                         <span className="flex items-center gap-1">
-                          <span className="material-symbols-outlined text-sm">people</span>
-                          {course.StudentCount || 0} Learners
+                          <span className="material-symbols-outlined text-sm">
+                            people
+                          </span>
+                          {course.studentCount || 0} Learners
                         </span>
                         <span className="flex items-center gap-1">
-                          <span className="material-symbols-outlined text-sm">video_library</span>
+                          <span className="material-symbols-outlined text-sm">
+                            video_library
+                          </span>
                           {course.lectureCount || 0} Lectures
                         </span>
                       </div>
@@ -408,12 +730,19 @@ export default function InstructorDashboard() {
                       {/* Price and Rating */}
                       <div className="flex items-center justify-between pt-4 border-t border-white/10">
                         <span className="text-lg font-bold text-purple-400">
-                          ${(course.DiscountPrice || course.Price || 0).toFixed(2)}
+                          $
+                          {(course.discountPrice || course.price || 0).toFixed(
+                            2,
+                          )}
                         </span>
-                        {course.Rating > 0 && (
+                        {course.rating > 0 && (
                           <div className="flex items-center gap-1 text-yellow-400">
-                            <span className="material-symbols-outlined text-sm">star</span>
-                            <span className="font-bold">{course.Rating.toFixed(1)}</span>
+                            <span className="material-symbols-outlined text-sm">
+                              star
+                            </span>
+                            <span className="font-bold">
+                              {course.rating.toFixed(1)}
+                            </span>
                           </div>
                         )}
                       </div>
@@ -421,26 +750,45 @@ export default function InstructorDashboard() {
                       {/* Action Buttons */}
                       <div className="flex gap-2 pt-4">
                         <button
-                          onClick={() => handleEdit(course.Id)}
+                          onClick={() => handleView(course.id)}
                           className="flex-1 px-4 py-2 bg-white/5 hover:bg-purple-500/20 text-white text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2"
                         >
-                          <span className="material-symbols-outlined text-sm">edit</span>
+                          <span className="material-symbols-outlined text-sm">
+                            visibility
+                          </span>
+                          View
+                        </button>
+                        <button
+                          onClick={() => handleEdit(course.id)}
+                          className="flex-1 px-4 py-2 bg-white/5 hover:bg-green-500/20 text-white text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2"
+                        >
+                          <span className="material-symbols-outlined text-sm">
+                            edit
+                          </span>
                           Edit
                         </button>
                         <button
-                          onClick={() => handlePublish(course.Id)}
+                          onClick={() => handlePublish(course.id)}
                           className="flex-1 px-4 py-2 bg-white/5 hover:bg-blue-500/20 text-white text-xs font-bold rounded-lg transition-all flex items-center justify-center gap-2"
                         >
                           <span className="material-symbols-outlined text-sm">
-                            {course.Status === "published" ? "unpublished" : "publish"}
+                            {course.status === "Ongoing" ||
+                            course.status === "published"
+                              ? "unpublished"
+                              : "publish"}
                           </span>
-                          {course.Status === "published" ? "Unpub" : "Pub"}
+                          {course.status === "Ongoing" ||
+                          course.status === "published"
+                            ? "Unpub"
+                            : "Pub"}
                         </button>
                         <button
-                          onClick={() => handleDelete(course.Id)}
+                          onClick={() => handleDelete(course.id)}
                           className="px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-bold rounded-lg transition-all"
                         >
-                          <span className="material-symbols-outlined text-sm">delete</span>
+                          <span className="material-symbols-outlined text-sm">
+                            delete
+                          </span>
                         </button>
                       </div>
                     </div>
@@ -454,11 +802,24 @@ export default function InstructorDashboard() {
 
       {/* Mobile Bottom Navigation */}
       <div className="lg:hidden fixed bottom-0 left-0 right-0 bg-white/5 backdrop-blur-xl border-t border-white/10 px-4 py-3 flex justify-between items-center z-40">
-        <button className="text-purple-400"><span className="material-symbols-outlined">dashboard</span></button>
-        <button className="text-slate-400"><span className="material-symbols-outlined">layers</span></button>
-        <button onClick={handleCreateCourse} className="w-12 h-12 -mt-6 rounded-full bg-purple-500 flex items-center justify-center text-white"><span className="material-symbols-outlined">add</span></button>
-        <button className="text-slate-400"><span className="material-symbols-outlined">trending_up</span></button>
-        <button className="text-slate-400"><span className="material-symbols-outlined">person</span></button>
+        <button className="text-purple-400">
+          <span className="material-symbols-outlined">dashboard</span>
+        </button>
+        <button className="text-slate-400">
+          <span className="material-symbols-outlined">layers</span>
+        </button>
+        <button
+          onClick={handleCreateCourse}
+          className="w-12 h-12 -mt-6 rounded-full bg-purple-500 flex items-center justify-center text-white"
+        >
+          <span className="material-symbols-outlined">add</span>
+        </button>
+        <button className="text-slate-400">
+          <span className="material-symbols-outlined">trending_up</span>
+        </button>
+        <button className="text-slate-400">
+          <span className="material-symbols-outlined">person</span>
+        </button>
       </div>
 
       <style>{`

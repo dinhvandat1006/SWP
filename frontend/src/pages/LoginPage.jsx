@@ -55,7 +55,7 @@ const LoginPage = () => {
   // Get role from query params (instructor or student/default)
   const queryParams = new URLSearchParams(window.location.search);
   const role = queryParams.get("role") || "student";
-  const isInstructor = role === "instructor";
+  const isInstructor = (role || "").trim().toLowerCase() === "instructor";
 
   const handleGoogleSuccess = async (credentialResponse) => {
     setIsLoading(true);

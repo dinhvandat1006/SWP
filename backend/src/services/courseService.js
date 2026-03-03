@@ -57,9 +57,9 @@ export const getCourses = async (filters = {}) => {
       return cachedResult;
     }
 
-    // Build where clause - Match actual database values
+    // Build where clause - Accept both Approved and APPROVED for compatibility
     const where = {
-      ApprovalStatus: "APPROVED", // Match database: 'APPROVED' (uppercase)
+      OR: [{ ApprovalStatus: "APPROVED" }, { ApprovalStatus: "Approved" }],
       Status: "Ongoing", // Match database: 'Ongoing' (most courses have this status)
     };
 
@@ -268,11 +268,22 @@ export const getCourseById = async (courseId) => {
             Id: true,
             Title: true,
             CreationTime: true,
-            // Only fetch lecture count, not full lecture content
+            // Fetch full lecture content with materials
             Lectures: {
               select: {
                 Id: true,
                 Title: true,
+                Content: true,
+                IsPreviewable: true,
+                LectureMaterial: {
+                  select: {
+                    Type: true,
+                    Url: true,
+                  },
+                },
+              },
+              orderBy: {
+                CreationTime: "asc",
               },
             },
           },
@@ -304,20 +315,30 @@ export const getInstructorCourses = async (instructorId, filters = {}) => {
 
     const skip = (page - 1) * limit;
 
+    console.log(
+      "[getInstructorCourses] Fetching for instructorId:",
+      instructorId,
+      "filters:",
+      filters,
+    );
+
     // Build where clause
     const where = { InstructorId: instructorId };
     if (status !== "all") {
       // Map frontend status to database Status
       const statusMap = {
-        'published': 'Ongoing',
-        'draft': 'Draft',
-        'archived': 'Archived'
+        published: "Ongoing",
+        draft: "Draft",
+        archived: "Archived",
       };
       where.Status = statusMap[status] || status;
     }
 
+    console.log("[getInstructorCourses] Where clause:", where);
+
     // Get total count
     const total = await prisma.courses.count({ where });
+    console.log("[getInstructorCourses] Total courses:", total);
 
     // Get courses
     const courses = await prisma.courses.findMany({
@@ -347,6 +368,15 @@ export const getInstructorCourses = async (instructorId, filters = {}) => {
       take: limit,
     });
 
+    console.log("[getInstructorCourses] Found courses:", courses.length);
+    if (courses.length > 0) {
+      console.log("[getInstructorCourses] First course:", {
+        id: courses[0].Id,
+        title: courses[0].Title,
+        status: courses[0].Status,
+      });
+    }
+
     // Calculate lecture count and transform data
     const coursesWithLectureCount = courses.map((course) => ({
       id: course.Id,
@@ -357,7 +387,10 @@ export const getInstructorCourses = async (instructorId, filters = {}) => {
       discountPrice: course.Discount,
       status: course.Status,
       thumbnailUrl: course.ThumbUrl,
-      rating: course.RatingCount > 0 ? Number(course.TotalRating) / course.RatingCount : 0,
+      rating:
+        course.RatingCount > 0
+          ? Number(course.TotalRating) / course.RatingCount
+          : 0,
       reviewCount: course.RatingCount,
       studentCount: course.LearnerCount,
       lectureCount: course.Sections.reduce(
@@ -537,6 +570,483 @@ export const createCourse = async (courseData) => {
     return newCourse;
   } catch (error) {
     console.error("[courseService] Error creating course:", error);
+    throw error;
+  }
+};
+
+// Publish course (change status to Ongoing and auto-approve)
+export const publishCourse = async (courseId, instructorId) => {
+  try {
+    console.log(
+      "[courseService] Publishing course:",
+      courseId,
+      "by instructor:",
+      instructorId,
+    );
+
+    // Check if course exists and belongs to instructor
+    const course = await prisma.courses.findUnique({
+      where: { Id: courseId },
+      include: {
+        Instructors: {
+          select: {
+            CreatorId: true,
+          },
+        },
+      },
+    });
+
+    if (!course) {
+      throw new Error("Course not found");
+    }
+
+    if (course.Instructors.CreatorId !== instructorId) {
+      throw new Error("You do not have permission to publish this course");
+    }
+
+    // Update course status and approval (match DB values used in getCourses)
+    const updatedCourse = await prisma.courses.update({
+      where: { Id: courseId },
+      data: {
+        Status: "Ongoing",
+        ApprovalStatus: "Approved", // Will be normalized by DB
+        LastModificationTime: new Date(),
+      },
+    });
+
+    console.log("[courseService] Course published successfully:", courseId);
+    return updatedCourse;
+  } catch (error) {
+    console.error("[courseService] Error publishing course:", error);
+    throw error;
+  }
+};
+
+// Unpublish course (change status back to Draft)
+export const unpublishCourse = async (courseId, instructorId) => {
+  try {
+    console.log("[courseService] Unpublishing course:", courseId);
+
+    // Check if course exists and belongs to instructor
+    const course = await prisma.courses.findUnique({
+      where: { Id: courseId },
+      include: {
+        Instructors: {
+          select: {
+            CreatorId: true,
+          },
+        },
+      },
+    });
+
+    if (!course) {
+      throw new Error("Course not found");
+    }
+
+    if (course.Instructors.CreatorId !== instructorId) {
+      throw new Error("You do not have permission to unpublish this course");
+    }
+
+    // Update course status
+    const updatedCourse = await prisma.courses.update({
+      where: { Id: courseId },
+      data: {
+        Status: "Draft",
+        LastModificationTime: new Date(),
+      },
+    });
+
+    console.log("[courseService] Course unpublished successfully:", courseId);
+    return updatedCourse;
+  } catch (error) {
+    console.error("[courseService] Error unpublishing course:", error);
+    throw error;
+  }
+};
+
+// Get course by ID for instructor preview (allows Draft status)
+export const getInstructorCourseById = async (courseId, instructorId) => {
+  try {
+    console.log(
+      "[courseService] Fetching instructor course:",
+      courseId,
+      "for instructor:",
+      instructorId,
+    );
+
+    const course = await prisma.courses.findFirst({
+      where: {
+        Id: courseId,
+        InstructorId: instructorId, // Only owner can view
+      },
+      select: {
+        // Core fields
+        Id: true,
+        Title: true,
+        Intro: true,
+        Description: true,
+        ThumbUrl: true,
+        Price: true,
+        Discount: true,
+        Level: true,
+        Status: true,
+        ApprovalStatus: true,
+
+        // Stats
+        RatingCount: true,
+        TotalRating: true,
+        LectureCount: true,
+        LearnerCount: true,
+
+        // Timestamps
+        CreationTime: true,
+
+        // Relations with selective fields
+        Categories: {
+          select: {
+            Id: true,
+            Title: true,
+            Description: true,
+          },
+        },
+        Instructors: {
+          select: {
+            Id: true,
+            CreatorId: true,
+            Users_Instructors_CreatorIdToUsers: {
+              select: {
+                Id: true,
+                FullName: true,
+                AvatarUrl: true,
+              },
+            },
+          },
+        },
+        Sections: {
+          select: {
+            Id: true,
+            Title: true,
+            Index: true,
+            CreationTime: true,
+            Lectures: {
+              select: {
+                Id: true,
+                Title: true,
+              },
+              orderBy: {
+                CreationTime: "asc",
+              },
+            },
+          },
+          orderBy: {
+            CreationTime: "asc",
+          },
+        },
+      },
+    });
+
+    console.log(
+      "[courseService] Instructor course found:",
+      course ? "Yes" : "No",
+    );
+
+    if (!course) {
+      throw new Error(
+        "Course not found or you don't have permission to view it",
+      );
+    }
+
+    return course;
+  } catch (error) {
+    console.error("[courseService] Error fetching instructor course:", error);
+    throw error;
+  }
+};
+
+// Update course by instructor
+export const updateCourse = async (courseId, instructorId, courseData) => {
+  try {
+    const {
+      title,
+      description,
+      intro,
+      price,
+      level,
+      sections = [],
+    } = courseData;
+
+    console.log("[courseService] Updating course:", {
+      courseId,
+      instructorId,
+      title,
+      sectionCount: sections.length,
+    });
+
+    // Check if course exists (allow any instructor to update)
+    const course = await prisma.courses.findFirst({
+      where: {
+        Id: courseId,
+      },
+      include: {
+        Sections: {
+          include: {
+            Lectures: true,
+          },
+        },
+      },
+    });
+
+    if (!course) {
+      throw new Error("Course not found");
+    }
+
+    // Update course basic information
+    const updatedCourse = await prisma.courses.update({
+      where: { Id: courseId },
+      data: {
+        ...(title && { Title: title }),
+        ...(description !== undefined && { Description: description }),
+        ...(intro !== undefined && { Intro: intro }),
+        ...(price !== undefined && { Price: parseFloat(price) || 0 }),
+        ...(level && { Level: level }),
+        LastModifierId: instructorId,
+        LastModificationTime: new Date(),
+      },
+    });
+
+    // Handle sections update
+    if (Array.isArray(sections) && sections.length > 0) {
+      // Get current section IDs
+      const currentSectionIds = course.Sections.map((s) => s.Id);
+      const newSectionIds = sections
+        .filter((s) => s.id) // Sections with existing IDs
+        .map((s) => s.id);
+
+      // Delete sections that are not in the update
+      const sectionsToDelete = currentSectionIds.filter(
+        (id) => !newSectionIds.includes(id),
+      );
+
+      if (sectionsToDelete.length > 0) {
+        await prisma.sections.deleteMany({
+          where: { Id: { in: sectionsToDelete } },
+        });
+        console.log(
+          "[courseService] Deleted sections:",
+          sectionsToDelete.length,
+        );
+      }
+
+      // Update or create sections
+      for (
+        let sectionIndex = 0;
+        sectionIndex < sections.length;
+        sectionIndex++
+      ) {
+        const sectionData = sections[sectionIndex];
+
+        if (sectionData.id) {
+          // Update existing section
+          const existingSection = course.Sections.find(
+            (s) => s.Id === sectionData.id,
+          );
+
+          if (existingSection) {
+            await prisma.sections.update({
+              where: { Id: sectionData.id },
+              data: {
+                Title: sectionData.title || `Section ${sectionIndex + 1}`,
+                Index: sectionIndex,
+                LastModificationTime: new Date(),
+              },
+            });
+
+            // Handle lectures in this section
+            if (Array.isArray(sectionData.lectures)) {
+              const currentLectureIds = existingSection.Lectures.map(
+                (l) => l.Id,
+              );
+              const newLectureIds = sectionData.lectures
+                .filter((l) => l.id)
+                .map((l) => l.id);
+
+              // Delete lectures that are not in the update
+              const lecturesToDelete = currentLectureIds.filter(
+                (id) => !newLectureIds.includes(id),
+              );
+
+              if (lecturesToDelete.length > 0) {
+                await prisma.lectures.deleteMany({
+                  where: { Id: { in: lecturesToDelete } },
+                });
+                console.log(
+                  "[courseService] Deleted lectures:",
+                  lecturesToDelete.length,
+                );
+              }
+
+              // Update or create lectures
+              for (
+                let lectureIndex = 0;
+                lectureIndex < sectionData.lectures.length;
+                lectureIndex++
+              ) {
+                const lectureData = sectionData.lectures[lectureIndex];
+
+                if (lectureData.id) {
+                  // Update existing lecture
+                  await prisma.lectures.update({
+                    where: { Id: lectureData.id },
+                    data: {
+                      Title: lectureData.title || `Lecture ${lectureIndex + 1}`,
+                      Content: lectureData.description || "",
+                      LastModificationTime: new Date(),
+                    },
+                  });
+                } else {
+                  // Create new lecture
+                  await prisma.lectures.create({
+                    data: {
+                      Title: lectureData.title || `Lecture ${lectureIndex + 1}`,
+                      Content: lectureData.description || "",
+                      SectionId: sectionData.id,
+                    },
+                  });
+                }
+              }
+            }
+          }
+        } else {
+          // Create new section
+          const newSection = await prisma.sections.create({
+            data: {
+              Title: sectionData.title || `Section ${sectionIndex + 1}`,
+              Index: sectionIndex,
+              CourseId: courseId,
+            },
+          });
+
+          // Create lectures for new section
+          if (Array.isArray(sectionData.lectures)) {
+            for (
+              let lectureIndex = 0;
+              lectureIndex < sectionData.lectures.length;
+              lectureIndex++
+            ) {
+              const lectureData = sectionData.lectures[lectureIndex];
+
+              await prisma.lectures.create({
+                data: {
+                  Title: lectureData.title || `Lecture ${lectureIndex + 1}`,
+                  Content: lectureData.description || "",
+                  SectionId: newSection.Id,
+                },
+              });
+            }
+          }
+        }
+      }
+    }
+
+    // Fetch updated course with all related data
+    const result = await prisma.courses.findUnique({
+      where: { Id: courseId },
+      include: {
+        Sections: {
+          include: {
+            Lectures: true,
+          },
+          orderBy: {
+            Index: "asc",
+          },
+        },
+        Instructors: {
+          select: {
+            Users_Instructors_CreatorIdToUsers: {
+              select: {
+                FullName: true,
+                AvatarUrl: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    console.log("[courseService] Course updated successfully:", courseId);
+    return result;
+  } catch (error) {
+    console.error("[courseService] Error updating course:", error);
+    throw error;
+  }
+};
+
+// Delete Course
+export const deleteCourse = async (courseId, instructorId) => {
+  try {
+    console.log(
+      `[courseService] deleteCourse - Course: ${courseId}, Instructor: ${instructorId}`,
+    );
+
+    // Check if course exists (allow any instructor to delete)
+    const course = await prisma.courses.findUnique({
+      where: { Id: courseId },
+    });
+
+    if (!course) {
+      throw new Error("Course not found");
+    }
+
+    // Removed instructor ownership check - any instructor can delete
+
+    // Check if course has any enrollments
+    const enrollmentCount = await prisma.enrollments.count({
+      where: { CourseId: courseId },
+    });
+
+    if (enrollmentCount > 0) {
+      throw new Error(
+        "Cannot delete course with active enrollments. Please archive it instead.",
+      );
+    }
+
+    // Delete related data in order (due to foreign key constraints)
+    // 1. Delete lectures first
+    const sections = await prisma.sections.findMany({
+      where: { CourseId: courseId },
+      select: { Id: true },
+    });
+
+    for (const section of sections) {
+      await prisma.lectures.deleteMany({
+        where: { SectionId: section.Id },
+      });
+    }
+
+    // 2. Delete sections
+    await prisma.sections.deleteMany({
+      where: { CourseId: courseId },
+    });
+
+    // 3. Delete reviews
+    await prisma.reviews.deleteMany({
+      where: { CourseId: courseId },
+    });
+
+    // 4. Delete wishlist items
+    await prisma.wishlist.deleteMany({
+      where: { CourseId: courseId },
+    });
+
+    // 5. Finally delete the course
+    await prisma.courses.delete({
+      where: { Id: courseId },
+    });
+
+    console.log("[courseService] Course deleted successfully:", courseId);
+    return { success: true, message: "Course deleted successfully" };
+  } catch (error) {
+    console.error("[courseService] Error deleting course:", error);
     throw error;
   }
 };

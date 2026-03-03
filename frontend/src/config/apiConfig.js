@@ -30,11 +30,21 @@ export const ENDPOINTS = {
 
 // API Helper functions
 export const apiCall = async (url, options = {}) => {
+  // Get token from localStorage
+  const token = localStorage.getItem("accessToken");
+
+  const headers = {
+    "Content-Type": "application/json",
+    ...options.headers,
+  };
+
+  // Add Authorization header if token exists
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
   const response = await fetch(`${API_BASE_URL}${url}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
+    headers,
     credentials: "include",
     ...options,
   });
@@ -44,4 +54,10 @@ export const apiCall = async (url, options = {}) => {
   }
 
   return response.json();
+};
+
+export default {
+  BASE_URL: API_BASE_URL,
+  ENDPOINTS,
+  apiRequest: apiCall,
 };

@@ -26,6 +26,7 @@ import InstructorUploadPage from "./pages/InstructorUploadPage";
 import InstructorCourseBasicsPage from "./pages/InstructorCourseBasicsPage";
 import InstructorCourseCurriculumPage from "./pages/InstructorCourseCurriculumPage";
 import InstructorCourseReviewPage from "./pages/InstructorCourseReviewPage";
+import EditCoursePage from "./pages/EditCoursePage";
 import TestLearnPage from "./pages/TestLearnPage";
 
 function App() {
@@ -46,12 +47,14 @@ function App() {
             <Route path="/register" element={<RegisterPage />} />
             <Route path="/courses" element={<CoursesPage />} />
             <Route path="/courses/:courseId" element={<CourseDetailsPage />} />
-            <Route
-              path="/course/:courseId/lesson/:lessonId"
-              element={<CourseLessonPage />}
-            />
+            {/* Course lesson routes - order matters! */}
             <Route
               path="/course/demo/lesson/:lessonId"
+              element={<CourseLessonPage />}
+            />
+            <Route path="/course/:courseId" element={<CourseLessonPage />} />
+            <Route
+              path="/course/:courseId/lesson/:lessonId"
               element={<CourseLessonPage />}
             />
             <Route path="/test-learn" element={<TestLearnPage />} />
@@ -80,6 +83,7 @@ function App() {
               path="/instructor/create-course/review"
               element={<InstructorCourseReviewPage />}
             />
+            <Route path="/edit-course/:courseId" element={<EditCoursePage />} />
           </Routes>
         </Router>
       </CartProvider>

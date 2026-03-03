@@ -1,10 +1,24 @@
 import { apiCall } from "../config/apiConfig";
 
 // Fetch course with all sections and lectures
-export const fetchCourseLessons = async (courseId) => {
+export const fetchCourseLessons = async (
+  courseId,
+  isInstructorPreview = false,
+) => {
   try {
-    console.log("[lessonService] Fetching course lessons for:", courseId);
-    const data = await apiCall(`/courses/${courseId}`);
+    console.log(
+      "[lessonService] Fetching course lessons for:",
+      courseId,
+      "isInstructorPreview:",
+      isInstructorPreview,
+    );
+
+    // Use instructor endpoint if previewing own course
+    const endpoint = isInstructorPreview
+      ? `/courses/instructor/course/${courseId}`
+      : `/courses/${courseId}`;
+
+    const data = await apiCall(endpoint);
     console.log("[lessonService] Course data received:", data);
     const courseData = data.data || data;
     console.log("[lessonService] Processed course data:", courseData);
